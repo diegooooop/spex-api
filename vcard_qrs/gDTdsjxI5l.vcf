@@ -8,5 +8,5 @@ TEL;TYPE=CELL,VOICE:0912356789
 TEL;TYPE=WORK,VOICE:12357849
 EMAIL;TYPE=INTERNET:alexcruz@spex.com
 URL:spexcard.com
-ADR;TYPE=WORK:;;Makati, Metro Manila;;;;
+ADR;TYPE=WORK:;;Makati\, Metro Manila;;;;
 END:VCARD

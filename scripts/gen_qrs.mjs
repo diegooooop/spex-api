@@ -8,6 +8,12 @@
  *
  * Usage:
  *   node scripts/gen_qrs.mjs
+ *
+ * Env:
+ *   FRONTEND_BASE="https://www.spexcard.com"
+ *   PROFILE_ROUTE="/u"
+ *   CLAIM_ROUTE="/claim"
+ *   VCARD_OUT_DIR="./vcard_qrs"
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -16,31 +22,53 @@ import QRCode from "qrcode";
 
 const prisma = new PrismaClient();
 
+// ---- Config ----
 const FRONTEND_BASE =
-  process.env.FRONTEND_BASE?.replace(/\/$/, "") || "http://localhost:3000";
+  (process.env.FRONTEND_BASE || "http://localhost:3000").replace(/\/$/, "");
+const PROFILE_ROUTE = process.env.PROFILE_ROUTE || "/u";      // e.g., /u
+const CLAIM_ROUTE = process.env.CLAIM_ROUTE || "/claim";      // e.g., /claim
+const OUT_DIR = process.env.VCARD_OUT_DIR || "./vcard_qrs";
+
+// ---- Helpers ----
+function vEscape(s = "") {
+  // Escape commas, semicolons, and newlines per vCard 3.0
+  return String(s)
+    .replace(/\\/g, "\\\\")
+    .replace(/\n|\r\n?/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
 
 /** Build a vCard 3.0 string from a Card row */
 function buildVCard(card) {
-  const parts = (card.name || "").trim().split(/\s+/);
+  const name = (card.name || "").trim();
+  const parts = name.split(/\s+/).filter(Boolean);
   const first = parts[0] || "";
   const last = parts.length > 1 ? parts[parts.length - 1] : "";
 
-  return [
+  const lines = [
     "BEGIN:VCARD",
     "VERSION:3.0",
-    `N:${last};${first};;;`,
-    `FN:${card.name || ""}`,
-    card.company ? `ORG:${card.company}` : "",
-    card.title ? `TITLE:${card.title}` : "",
-    card.mobile ? `TEL;TYPE=CELL,VOICE:${card.mobile}` : "",
-    card.phone ? `TEL;TYPE=WORK,VOICE:${card.phone}` : "",
-    card.email ? `EMAIL;TYPE=INTERNET:${card.email}` : "",
-    card.website ? `URL:${card.website}` : "",
-    card.address ? `ADR;TYPE=WORK:;;${card.address};;;;` : "",
-    "END:VCARD",
-  ]
-    .filter(Boolean)
-    .join("\r\n");
+    `N:${vEscape(last)};${vEscape(first)};;;`,
+    `FN:${vEscape(name)}`,
+  ];
+
+  if (card.company) lines.push(`ORG:${vEscape(card.company)}`);
+  if (card.title) lines.push(`TITLE:${vEscape(card.title)}`);
+  if (card.mobile) lines.push(`TEL;TYPE=CELL,VOICE:${vEscape(card.mobile)}`);
+  if (card.phone) lines.push(`TEL;TYPE=WORK,VOICE:${vEscape(card.phone)}`);
+  if (card.email) lines.push(`EMAIL;TYPE=INTERNET:${vEscape(card.email)}`);
+  if (card.website) lines.push(`URL:${vEscape(card.website)}`);
+  if (card.address) lines.push(`ADR;TYPE=WORK:;;${vEscape(card.address)};;;;`);
+
+  lines.push("END:VCARD");
+  return lines.join("\r\n");
+}
+
+/** Build the URL for QR: claimed → PROFILE_ROUTE?uid=..., unclaimed → CLAIM_ROUTE?uid=... */
+function buildCardUrl(uid, { claimed }) {
+  const route = claimed ? PROFILE_ROUTE : CLAIM_ROUTE;
+  return `${FRONTEND_BASE}${route}?uid=${encodeURIComponent(uid)}`;
 }
 
 async function qrToFile(path, text) {
@@ -54,8 +82,7 @@ async function qrToFile(path, text) {
 }
 
 async function main() {
-  const outDir = "./vcard_qrs";
-  if (!existsSync(outDir)) mkdirSync(outDir);
+  if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
 
   console.log("📦 Fetching all cards from database...");
   const cards = await prisma.card.findMany({
@@ -76,39 +103,45 @@ async function main() {
 
   if (!cards.length) {
     console.log("⚠️ No cards found in DB.");
-    process.exit(0);
+    return;
   }
 
   console.log(`🪪 Generating ${cards.length} QR sets...`);
+  console.log(
+    `🔧 Config → FRONTEND_BASE=${FRONTEND_BASE}, PROFILE_ROUTE=${PROFILE_ROUTE}, CLAIM_ROUTE=${CLAIM_ROUTE}, OUT_DIR=${OUT_DIR}`
+  );
 
   for (const c of cards) {
-    const fileBase = `${outDir}/${c.uid}`;
+    const fileBase = `${OUT_DIR}/${c.uid}`;
 
+    // Consider "claimed" if any identity field is present
     const isClaimed = !!(
       c.name || c.mobile || c.email || c.company || c.title || c.imageUrl
     );
 
-    // 🟢 Always make a URL QR
-    const url = `${FRONTEND_BASE}/${c.uid}`;
+    // URL QR
+    const url = buildCardUrl(c.uid, { claimed: isClaimed });
     await qrToFile(`${fileBase}-url.png`, url);
 
-    // 🔵 If claimed, make vCard + QR
+    // If claimed, produce vCard file + vCard QR
     if (isClaimed) {
       const vcard = buildVCard(c);
       writeFileSync(`${fileBase}.vcf`, vcard, "utf8");
       await qrToFile(`${fileBase}.png`, vcard);
-      console.log(`✅ ${c.uid}: Claimed → vCard + URL QR`);
+      console.log(`✅ ${c.uid}: Claimed → vCard + URL QR (${url})`);
     } else {
-      console.log(`🕓 ${c.uid}: Unclaimed → URL QR only (auto-claim link)`);
+      console.log(`🕓 ${c.uid}: Unclaimed → URL QR only (${url})`);
     }
   }
 
-  console.log(`\n✨ Done! Files in ${outDir}/`);
-  await prisma.$disconnect();
+  console.log(`\n✨ Done! Files in ${OUT_DIR}/`);
 }
 
-main().catch(async (err) => {
-  console.error("❌ Error:", err);
-  await prisma.$disconnect();
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error("❌ Error:", err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
