@@ -15,30 +15,30 @@ const app = express();
 
 /* ----------------------- 🔐 CORS CONFIG ----------------------- */
 const allowedOrigins = [
-  "https://spexcard.com",
-  "https://www.spexcard.com"
+  'https://spexcard.com',
+  'https://www.spexcard.com',
 ];
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // allow server-to-server or same-origin
+    if (!origin) return cb(null, true); // server-to-server or same-origin
     if (allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error("Not allowed by CORS"));
+    return cb(new Error('Not allowed by CORS'));
   },
-  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type", "x-admin-key", "Authorization"],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-admin-key', 'Authorization', 'Cache-Control'],
   credentials: false,
-  maxAge: 86400
+  maxAge: 86400,
 }));
 
-app.options("*", cors()); // handle preflight globally
+app.options('*', cors()); // handle preflight globally
 /* ------------------------------------------------------------- */
 
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const FRONTEND_BASE = process.env.FRONTEND_BASE || 'http://localhost:3000';
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
-const ADMIN_KEY = process.env.ADMIN_KEY || "diego";
+const ADMIN_KEY = process.env.ADMIN_KEY || 'diego';
 
 // middleware
 app.use(express.json());
@@ -51,9 +51,9 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ---------- Helpers ----------
 function requireAdmin(req, res, next) {
-  const key = req.headers["x-admin-key"];
+  const key = req.headers['x-admin-key'];
   if (!ADMIN_KEY || key !== ADMIN_KEY)
-    return res.status(401).json({ error: "admin_only" });
+    return res.status(401).json({ error: 'admin_only' });
   next();
 }
 
@@ -75,7 +75,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
     cb(null, `${Date.now()}-${nanoid(8)}${ext}`);
-  }
+  },
 });
 const fileFilter = (req, file, cb) => {
   const ok = /image\/(jpeg|jpg|png|webp|gif)/.test(file.mimetype);
@@ -84,10 +84,41 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 2 * 1024 * 1024 }
+  limits: { fileSize: 2 * 1024 * 1024 },
 }); // 2MB limit
 
-// ---------- Admin Routes ----------
+/* ======================  vCard helpers  ====================== */
+function hasProfileData(c) {
+  return !!(
+    c?.name || c?.mobile || c?.phone ||
+    c?.emailPublic || c?.email || c?.company ||
+    c?.title || c?.website || c?.address || c?.imageUrl
+  );
+}
+
+function vcardFrom(card) {
+  const parts = (card.name || '').trim().split(/\s+/);
+  const first = parts[0] || '';
+  const last  = parts.length > 1 ? parts[parts.length - 1] : '';
+  const email = card.emailPublic || card.email || '';
+
+  return [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    `N:${last};${first};;;`,
+    `FN:${card.name || ''}`,
+    card.company ? `ORG:${card.company}` : '',
+    card.title ? `TITLE:${card.title}` : '',
+    card.mobile ? `TEL;TYPE=CELL,VOICE:${card.mobile}` : '',
+    card.phone ? `TEL;TYPE=WORK,VOICE:${card.phone}` : '',
+    email ? `EMAIL;TYPE=INTERNET:${email}` : '',
+    card.website ? `URL:${card.website}` : '',
+    card.address ? `ADR;TYPE=WORK:;;${card.address};;;;` : '',
+    'END:VCARD',
+  ].filter(Boolean).join('\r\n');
+}
+
+/* =======================  Admin Routes  ====================== */
 app.post('/api/admin/create-uid', requireAdmin, async (req, res) => {
   const uid = nanoid(10);
   await prisma.card.create({ data: { uid } });
@@ -105,35 +136,50 @@ app.post('/api/admin/create-uids', requireAdmin, async (req, res) => {
   res.json({ ok: true, rows });
 });
 
-app.get("/api/admin/cards", requireAdmin, async (req, res) => {
+app.get('/api/admin/cards', requireAdmin, async (req, res) => {
   const take = Math.min(Math.max(Number(req.query.take) || 100, 1), 500);
   const skip = Math.max(Number(req.query.skip) || 0, 0);
   const [items, total] = await Promise.all([
     prisma.card.findMany({
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       select: {
         uid: true, createdAt: true, updatedAt: true,
         name: true, company: true, title: true,
         phone: true, mobile: true, email: true,
         website: true, address: true, socials: true, imageUrl: true,
-        claimedAt: true
+        claimedAt: true,
       },
-      take, skip
+      take, skip,
     }),
-    prisma.card.count()
+    prisma.card.count(),
   ]);
   const rows = items.map(c => ({ ...c, claimed: !!c.claimedAt }));
   res.json({ total, rows, take, skip });
 });
 
-// ---------- Public Routes ----------
-app.get('/api/card/:uid', async (req, res) => {
+/* =======================  Public Routes  ===================== */
+/** 
+ * IMPORTANT: vCard route MUST be defined BEFORE the JSON route,
+ * and the dot in ".vcf" must be escaped. Regex restricts UID.
+ */
+app.get('/api/card/:uid([A-Za-z0-9_-]{8,32})\\.vcf', async (req, res) => {
+  const { uid } = req.params;
+  const c = await prisma.card.findUnique({ where: { uid } });
+  if (!c) return res.status(404).send('Not found');
+  if (!hasProfileData(c)) return res.status(204).send(); // nothing to export
+
+  const vcf = vcardFrom(c);
+  res.set('Content-Type', 'text/vcard; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${uid}.vcf"`);
+  res.send(vcf);
+});
+
+app.get('/api/card/:uid([A-Za-z0-9_-]{8,32})', async (req, res) => {
   const { uid } = req.params;
   const card = await prisma.card.findUnique({ where: { uid } });
   if (!card) return res.status(404).json({ error: 'not_found' });
 
-  const claimed = !!card.claimedAt;
-  if (!claimed) {
+  if (!card.claimedAt) {
     const claimToken = jwt.sign({ uid, purpose: 'claim' }, JWT_SECRET);
     return res.json({ uid, claimed: false, claimToken });
   }
@@ -151,8 +197,8 @@ app.get('/api/card/:uid', async (req, res) => {
       website: card.website,
       address: card.address,
       socials: card.socials || {},
-      imageUrl: card.imageUrl
-    }
+      imageUrl: card.imageUrl,
+    },
   });
 });
 
@@ -184,8 +230,8 @@ app.post('/api/card/claim', async (req, res) => {
       socials: profile?.socials ?? {},
       imageUrl: profile?.imageUrl ?? null,
       claimedAt: new Date(),
-      claimedByEmail: emailForLogin ?? null
-    }
+      claimedByEmail: emailForLogin ?? null,
+    },
   });
 
   if (updated.count === 0)
@@ -195,48 +241,8 @@ app.post('/api/card/claim', async (req, res) => {
   res.json({ uid, authToken });
 });
 
-// vCard route
-function hasProfileData(c) {
-  return !!(
-    c?.name || c?.mobile || c?.phone ||
-    c?.emailPublic || c?.email || c?.company ||
-    c?.title || c?.website || c?.address || c?.imageUrl
-  );
-}
-function vcardFrom(card) {
-  const parts = (card.name || '').trim().split(/\s+/);
-  const first = parts[0] || '';
-  const last = parts.length > 1 ? parts[parts.length - 1] : '';
-  const email = card.emailPublic || card.email || '';
-
-  return [
-    'BEGIN:VCARD',
-    'VERSION:3.0',
-    `N:${last};${first};;;`,
-    `FN:${card.name || ''}`,
-    card.company ? `ORG:${card.company}` : '',
-    card.title ? `TITLE:${card.title}` : '',
-    card.mobile ? `TEL;TYPE=CELL,VOICE:${card.mobile}` : '',
-    card.phone ? `TEL;TYPE=WORK,VOICE:${card.phone}` : '',
-    email ? `EMAIL;TYPE=INTERNET:${email}` : '',
-    card.website ? `URL:${card.website}` : '',
-    card.address ? `ADR;TYPE=WORK:;;${card.address};;;;` : '',
-    'END:VCARD'
-  ].filter(Boolean).join('\r\n');
-}
-app.get('/api/card/:uid.vcf', async (req, res) => {
-  const { uid } = req.params;
-  const c = await prisma.card.findUnique({ where: { uid } });
-  if (!c) return res.status(404).send('Not found');
-  if (!hasProfileData(c)) return res.status(204).send();
-  const vcf = vcardFrom(c);
-  res.set('Content-Type', 'text/vcard; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="${uid}.vcf"`);
-  res.send(vcf);
-});
-
 // Owner Updates
-app.put('/api/card/:uid', requireAuth, async (req, res) => {
+app.put('/api/card/:uid([A-Za-z0-9_-]{8,32})', requireAuth, async (req, res) => {
   if (req.user.uid !== req.params.uid)
     return res.status(403).json({ error: 'forbidden' });
   const p = req.body?.profile || {};
@@ -252,8 +258,8 @@ app.put('/api/card/:uid', requireAuth, async (req, res) => {
       website: p.website ?? null,
       address: p.address ?? null,
       socials: p.socials ?? {},
-      imageUrl: p.imageUrl ?? null
-    }
+      imageUrl: p.imageUrl ?? null,
+    },
   });
   res.json({ ok: true });
 });
@@ -264,10 +270,11 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   const url = `${BASE_URL}/uploads/${req.file.filename}`;
   res.json({ url });
 });
+
 app.post('/api/event', async (req, res) => {
   const { uid, kind, ua } = req.body || {};
   await prisma.event.create({
-    data: { uid: uid || 'unknown', kind: kind || 'visit', ua, ip: req.ip }
+    data: { uid: uid || 'unknown', kind: kind || 'visit', ua, ip: req.ip },
   });
   res.json({ ok: true });
 });
