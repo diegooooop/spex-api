@@ -9,7 +9,7 @@
     "prisma:studio": "npx prisma studio",
     "prisma:migrate": "npx prisma migrate dev",
     "gen:qrs": "node scripts/gen_qrs.mjs",
-      "export:qrs": "node scripts/export_qr_sheet.mjs"
+    "export:qrs": "node scripts/export_qr_sheet.mjs"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",

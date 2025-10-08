@@ -13,17 +13,34 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const app = express();
 
+/* ----------------------- 🔐 CORS CONFIG ----------------------- */
+const allowedOrigins = [
+  "https://spexcard.com",
+  "https://www.spexcard.com"
+];
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // allow server-to-server or same-origin
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type", "x-admin-key", "Authorization"],
+  credentials: false,
+  maxAge: 86400
+}));
+
+app.options("*", cors()); // handle preflight globally
+/* ------------------------------------------------------------- */
+
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const FRONTEND_BASE = process.env.FRONTEND_BASE || 'http://localhost:3000';
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
-const ADMIN_KEY = process.env.ADMIN_KEY || "";
+const ADMIN_KEY = process.env.ADMIN_KEY || "diego";
 
 // middleware
-app.use(cors({
-  origin: [FRONTEND_BASE, 'http://localhost:3000'],
-  credentials: false
-}));
 app.use(express.json());
 app.use(cookieParser());
 app.use(morgan('tiny'));
@@ -33,7 +50,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ---------- Helpers ----------
-
 function requireAdmin(req, res, next) {
   const key = req.headers["x-admin-key"];
   if (!ADMIN_KEY || key !== ADMIN_KEY)
@@ -72,15 +88,12 @@ const upload = multer({
 }); // 2MB limit
 
 // ---------- Admin Routes ----------
-
-// create one UID
 app.post('/api/admin/create-uid', requireAdmin, async (req, res) => {
   const uid = nanoid(10);
   await prisma.card.create({ data: { uid } });
   res.json({ uid });
 });
 
-// bulk create UIDs
 app.post('/api/admin/create-uids', requireAdmin, async (req, res) => {
   const count = Math.min(Math.max(Number(req.body?.count) || 1, 1), 200);
   const rows = [];
@@ -92,7 +105,6 @@ app.post('/api/admin/create-uids', requireAdmin, async (req, res) => {
   res.json({ ok: true, rows });
 });
 
-// list cards
 app.get("/api/admin/cards", requireAdmin, async (req, res) => {
   const take = Math.min(Math.max(Number(req.query.take) || 100, 1), 500);
   const skip = Math.max(Number(req.query.skip) || 0, 0);
@@ -115,20 +127,14 @@ app.get("/api/admin/cards", requireAdmin, async (req, res) => {
 });
 
 // ---------- Public Routes ----------
-
-// 🆕 GET /api/card/:uid — auto-claim support
 app.get('/api/card/:uid', async (req, res) => {
   const { uid } = req.params;
   const card = await prisma.card.findUnique({ where: { uid } });
   if (!card) return res.status(404).json({ error: 'not_found' });
 
   const claimed = !!card.claimedAt;
-
   if (!claimed) {
-    const claimToken = jwt.sign(
-      { uid, purpose: 'claim' },
-      JWT_SECRET,
-    );
+    const claimToken = jwt.sign({ uid, purpose: 'claim' }, JWT_SECRET);
     return res.json({ uid, claimed: false, claimToken });
   }
 
@@ -150,7 +156,7 @@ app.get('/api/card/:uid', async (req, res) => {
   });
 });
 
-// 🆕 POST /api/card/claim — atomic first-claim
+// Claim route
 app.post('/api/card/claim', async (req, res) => {
   const { uid, claimToken, profile, emailForLogin } = req.body || {};
   if (!uid || !claimToken)
@@ -164,7 +170,6 @@ app.post('/api/card/claim', async (req, res) => {
     return res.status(401).json({ error: 'token_expired_or_invalid' });
   }
 
-  // atomic update: only update if not yet claimed
   const updated = await prisma.card.updateMany({
     where: { uid, claimedAt: null },
     data: {
@@ -190,19 +195,12 @@ app.post('/api/card/claim', async (req, res) => {
   res.json({ uid, authToken });
 });
 
-// 🆕 GET /api/card/:uid.vcf — downloadable contact
+// vCard route
 function hasProfileData(c) {
   return !!(
-    c?.name ||
-    c?.mobile ||
-    c?.phone ||
-    c?.emailPublic ||
-    c?.email ||
-    c?.company ||
-    c?.title ||
-    c?.website ||
-    c?.address ||
-    c?.imageUrl
+    c?.name || c?.mobile || c?.phone ||
+    c?.emailPublic || c?.email || c?.company ||
+    c?.title || c?.website || c?.address || c?.imageUrl
   );
 }
 function vcardFrom(card) {
@@ -226,30 +224,18 @@ function vcardFrom(card) {
     'END:VCARD'
   ].filter(Boolean).join('\r\n');
 }
-
 app.get('/api/card/:uid.vcf', async (req, res) => {
   const { uid } = req.params;
   const c = await prisma.card.findUnique({ where: { uid } });
   if (!c) return res.status(404).send('Not found');
-
-  // allow vCard for unclaimed cards if there is prefilled data
-  if (!hasProfileData(c)) {
-    // nothing meaningful to share yet (avoid blank vcf)
-    return res.status(204).send(); // No Content
-  }
-
+  if (!hasProfileData(c)) return res.status(204).send();
   const vcf = vcardFrom(c);
   res.set('Content-Type', 'text/vcard; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="${uid}.vcf"`);
-
-  // Optional: long cache for clients (you can tweak or remove)
-  // res.set('Cache-Control', 'public, max-age=86400');
-
   res.send(vcf);
 });
 
-// ---------- Owner Updates ----------
-
+// Owner Updates
 app.put('/api/card/:uid', requireAuth, async (req, res) => {
   if (req.user.uid !== req.params.uid)
     return res.status(403).json({ error: 'forbidden' });
@@ -272,15 +258,12 @@ app.put('/api/card/:uid', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Uploads & Analytics ----------
-
+// Uploads & Analytics
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file' });
-  // relative URL → Next.js rewrite will proxy /uploads/* to the API
- const url = `${BASE_URL}/uploads/${req.file.filename}`;
- res.json({ url });
+  const url = `${BASE_URL}/uploads/${req.file.filename}`;
+  res.json({ url });
 });
-
 app.post('/api/event', async (req, res) => {
   const { uid, kind, ua } = req.body || {};
   await prisma.event.create({
@@ -289,4 +272,4 @@ app.post('/api/event', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => console.log(`spex-api listening on ${BASE_URL}`));
+app.listen(PORT, () => console.log(`✅ spex-api running on ${BASE_URL}`));
