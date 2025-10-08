@@ -1,0 +1,26 @@
+uid,claimed,url,name,company,title,mobile,phone,email,website,address,vcard
+RZzxYQj5eQ,yes,http://localhost:3000/RZzxYQj5eQ,Dewey Pallasigue,DatosDX,CEO,09178275570,,dewey@datosdx.com,spexcard.com,1A South Maya Drive,"BEGIN:VCARD
+VERSION:3.0
+N:Pallasigue;Dewey;;;
+FN:Dewey Pallasigue
+ORG:DatosDX
+TITLE:CEO
+TEL;TYPE=CELL,VOICE:09178275570
+EMAIL;TYPE=INTERNET:dewey@datosdx.com
+URL:spexcard.com
+ADR;TYPE=WORK:;;1A South Maya Drive;;;;
+END:VCARD"
+jLpZd69E5o,no,http://localhost:3000/jLpZd69E5o,,,,,,,,,
+BtAgWIhfSg,no,http://localhost:3000/BtAgWIhfSg,,,,,,,,,
+BFv_eGxxiA,no,http://localhost:3000/BFv_eGxxiA,,,,,,,,,
+tlj_gkQL6K,yes,http://localhost:3000/tlj_gkQL6K,Diego Pallasigue,DatosDX,Lead Developer,09663398043,,diegopallasigue384@gmail.com,spexcard.com,1A South Maya Drive,"BEGIN:VCARD
+VERSION:3.0
+N:Pallasigue;Diego;;;
+FN:Diego Pallasigue
+ORG:DatosDX
+TITLE:Lead Developer
+TEL;TYPE=CELL,VOICE:09663398043
+EMAIL;TYPE=INTERNET:diegopallasigue384@gmail.com
+URL:spexcard.com
+ADR;TYPE=WORK:;;1A South Maya Drive;;;;
+END:VCARD"
