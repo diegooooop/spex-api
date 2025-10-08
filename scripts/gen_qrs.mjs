@@ -4,7 +4,7 @@
  * - Emits:
  *    ./vcard_qrs/<uid>.vcf          (if claimed)
  *    ./vcard_qrs/<uid>.png          (vCard QR – offline Add Contact)
- *    ./vcard_qrs/<uid>-url.png      (URL QR – claim or microsite)
+ *    ./vcard_qrs/<uid>-url.png      (URL QR – permanent profile link)
  *
  * Usage:
  *   node scripts/gen_qrs.mjs
@@ -25,8 +25,7 @@ const prisma = new PrismaClient();
 // ---- Config ----
 const FRONTEND_BASE =
   (process.env.FRONTEND_BASE || "http://localhost:3000").replace(/\/$/, "");
-const PROFILE_ROUTE = process.env.PROFILE_ROUTE || "/u";      // e.g., /u
-const CLAIM_ROUTE = process.env.CLAIM_ROUTE || "/claim";      // e.g., /claim
+const PROFILE_ROUTE = process.env.PROFILE_ROUTE || "/u"; // always the target route
 const OUT_DIR = process.env.VCARD_OUT_DIR || "./vcard_qrs";
 
 // ---- Helpers ----
@@ -65,10 +64,9 @@ function buildVCard(card) {
   return lines.join("\r\n");
 }
 
-/** Build the URL for QR: claimed → PROFILE_ROUTE?uid=..., unclaimed → CLAIM_ROUTE?uid=... */
-function buildCardUrl(uid, { claimed }) {
-  const route = claimed ? PROFILE_ROUTE : CLAIM_ROUTE;
-  return `${FRONTEND_BASE}${route}?uid=${encodeURIComponent(uid)}`;
+/** Build the permanent profile URL (always /u?uid=...) */
+function buildCardUrl(uid) {
+  return `${FRONTEND_BASE}${PROFILE_ROUTE}?uid=${encodeURIComponent(uid)}`;
 }
 
 async function qrToFile(path, text) {
@@ -108,7 +106,7 @@ async function main() {
 
   console.log(`🪪 Generating ${cards.length} QR sets...`);
   console.log(
-    `🔧 Config → FRONTEND_BASE=${FRONTEND_BASE}, PROFILE_ROUTE=${PROFILE_ROUTE}, CLAIM_ROUTE=${CLAIM_ROUTE}, OUT_DIR=${OUT_DIR}`
+    `🔧 Config → FRONTEND_BASE=${FRONTEND_BASE}, PROFILE_ROUTE=${PROFILE_ROUTE}, OUT_DIR=${OUT_DIR}`
   );
 
   for (const c of cards) {
@@ -119,8 +117,8 @@ async function main() {
       c.name || c.mobile || c.email || c.company || c.title || c.imageUrl
     );
 
-    // URL QR
-    const url = buildCardUrl(c.uid, { claimed: isClaimed });
+    // Always generate profile URL QR
+    const url = buildCardUrl(c.uid);
     await qrToFile(`${fileBase}-url.png`, url);
 
     // If claimed, produce vCard file + vCard QR
