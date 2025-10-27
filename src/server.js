@@ -265,6 +265,60 @@ app.put('/api/card/:uid([A-Za-z0-9_-]{8,32})', requireAuth, async (req, res) => 
   res.json({ ok: true });
 });
 
+// ============ Admin: read single card (no claim fields changed) ============
+app.get('/api/admin/cards/:uid', requireAdmin, async (req, res) => {
+  const { uid } = req.params;
+  const card = await prisma.card.findUnique({
+    where: { uid },
+    select: {
+      uid: true, createdAt: true, updatedAt: true,
+      name: true, company: true, title: true,
+      phone: true, mobile: true, email: true,
+      website: true, address: true, socials: true, imageUrl: true,
+      claimedAt: true, claimedByEmail: true,
+    },
+  });
+  if (!card) return res.status(404).json({ error: 'not_found' });
+  res.json(card);
+});
+
+// ============ Admin: update profile fields only (do NOT change claim fields) ============
+app.put('/api/admin/cards/:uid', requireAdmin, async (req, res) => {
+  const { uid } = req.params;
+  const p = req.body?.profile || {};
+
+  // Whitelist only profile fields; DO NOT include claimedAt/claimedByEmail
+  const data = {
+    name: p.name ?? null,
+    company: p.company ?? null,
+    title: p.title ?? null,
+    phone: p.phone ?? null,
+    mobile: p.mobile ?? null,
+    email: p.email ?? null,
+    website: p.website ?? null,
+    address: p.address ?? null,
+    socials: p.socials ?? {},
+    imageUrl: p.imageUrl ?? null,
+  };
+
+  try {
+    const updated = await prisma.card.update({
+      where: { uid },
+      data,
+      select: {
+        uid: true, name: true, company: true, title: true,
+        phone: true, mobile: true, email: true,
+        website: true, address: true, socials: true, imageUrl: true,
+        claimedAt: true, claimedByEmail: true, updatedAt: true,
+      },
+    });
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: 'update_failed' });
+  }
+});
+
+
 // Uploads & Analytics
 app.post('/api/upload', (req, res) => {
   upload.single('file')(req, res, (err) => {
