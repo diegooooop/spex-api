@@ -41,7 +41,8 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'diego';
 
 // middleware
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
+app.use(express.urlencoded({ extended: true, limit: '6mb' }));
 app.use(cookieParser());
 app.use(morgan('tiny'));
 
@@ -84,8 +85,8 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 2 * 1024 * 1024 },
-}); // 2MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }, // ✅ allow up to 5MB
+});
 
 /* ======================  vCard helpers  ====================== */
 function hasProfileData(c) {
@@ -265,10 +266,22 @@ app.put('/api/card/:uid([A-Za-z0-9_-]{8,32})', requireAuth, async (req, res) => 
 });
 
 // Uploads & Analytics
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no_file' });
-  const url = `${BASE_URL}/uploads/${req.file.filename}`;
-  res.json({ url });
+app.post('/api/upload', (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'file_too_large', maxMB: 5 });
+      }
+      if (err.message === 'invalid_file_type') {
+        return res.status(400).json({ error: 'invalid_file_type' });
+      }
+      return res.status(400).json({ error: 'upload_failed' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'no_file' });
+
+    const url = `${BASE_URL}/uploads/${req.file.filename}`;
+    res.json({ url });
+  });
 });
 
 app.post('/api/event', async (req, res) => {

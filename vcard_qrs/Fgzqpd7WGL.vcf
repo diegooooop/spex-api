@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Hernandez;Tommy;;;
+FN:Tommy Hernandez
+ORG:Machine & Computer World Inc.
+TEL;TYPE=CELL,VOICE:09176300308
+TEL;TYPE=WORK,VOICE:0283630118
+EMAIL;TYPE=INTERNET:tommyhph@yahoo.com
+URL:www.mcwi.com.ph
+ADR;TYPE=WORK:;;No. 27 Guava Road Potrero\, Malabon City Metro Manila;
+ ;;;
+END:VCARD
